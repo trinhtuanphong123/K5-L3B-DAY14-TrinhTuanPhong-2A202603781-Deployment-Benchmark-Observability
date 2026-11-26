@@ -26,6 +26,8 @@ RUN chown -R agent:agent /app
 USER agent
 
 ENV PATH=/home/agent/.local/bin:$PATH
+# HOME của user agent là /app (useradd -d /app) → chỉ cho Python thư mục package đã copy (CODE_LAB.md:821)
+ENV PYTHONUSERBASE=/home/agent/.local
 ENV PYTHONPATH=/app
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
