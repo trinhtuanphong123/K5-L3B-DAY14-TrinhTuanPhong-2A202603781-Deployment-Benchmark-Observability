@@ -8,9 +8,9 @@ Phân tích file `01-localhost-vs-production/develop/app.py` (54 dòng).
 
 | # | Anti-pattern | Vị trí (`file:dòng`) | Vì sao nguy hiểm |
 |---|---|---|---|
-| 1 | API key và mật khẩu database hardcode trong code | `develop/app.py:17-18` | Push lên GitHub là lộ key: bot của hacker quét tự động GitHub để tìm key bị lộ rồi dùng trái phép, gây tốn tiền và rò rỉ dữ liệu. Xoá file sau đó cũng không đủ vì key vẫn nằm trong lịch sử git |
-| 2 | Cấu hình ghi cứng trong code (`DEBUG = True`, `MAX_TOKENS = 500`) | `develop/app.py:21-22` | Khó thay đổi giữa các môi trường (dev/staging/production), mỗi lần đổi phải sửa code và build lại. Dễ để quên `DEBUG` bật ở production |
-| 3 | In API key ra log bằng `print` (`Using key: ...`); dùng `print` thay vì logging | `develop/app.py:33-38` (key bị in ở dòng 34) | Log thường được gửi sang hệ thống bên thứ ba hoặc nhiều người đọc được, nên key trong log cũng là lộ key. `print` cũng không có mức độ (level), thời gian hay cấu trúc nên khó tìm lỗi |
+| 1 | API key và mật khẩu database hardcode trong code | `develop/app.py:17-18` | Push lên GitHub sẽ bị bot của hacker quét tự động GitHub để tìm key bị lộ rồi dùng trái phép, gây tốn tiền và rò rỉ dữ liệu. Xoá file sau đó cũng không đủ vì key vẫn nằm trong lịch sử git |
+| 2 | Cấu hình ghi cứng trong code (`DEBUG = True`, `MAX_TOKENS = 500`) | `develop/app.py:21-22` | Khó thay đổi giữa các môi trường (dev/staging/production), mỗi lần đổi phải sửa code và build lại |
+| 3 | In API key ra log bằng `print` (`Using key: ...`); dùng `print` thay vì logging | `develop/app.py:33-38` (key bị in ở dòng 34) | Log thường được gửi sang hệ thống bên thứ ba hoặc nhiều người đọc được, nên key trong log cũng là lộ key. |
 | 4 | Không có health check endpoint (`GET /health` → 404) | `develop/app.py:42-43` (chỉ có comment, không có route) | Nếu agent crash hoặc treo, platform không có cách biết để restart; load balancer cũng không biết có nên gửi request vào hay không |
 | 5 | Không xử lý shutdown gracefully (không có `lifespan`, không có xử lý SIGTERM) | `develop/app.py:47-54` (chỉ gọi `uvicorn.run`) | Platform tắt container bằng SIGTERM mỗi lần deploy hoặc scale; không dọn dẹp thì request đang chạy có thể bị cắt ngang |
 | 6 | Host và port cố định (`host="localhost"`, `port=8000`) | `develop/app.py:51-52` | Trong container, nghe `localhost` thì bên ngoài không gọi vào được. Railway/Render cấp `PORT` qua biến môi trường, cố định 8000 thì app không nhận được traffic |
@@ -63,6 +63,110 @@ Nguồn: `develop/app.py` và `production/app.py`, `production/config.py` (trong
 
 ## Part 2: Docker
 
+### Exercise 2.1: Dockerfile questions
+
+Phân tích `02-docker/develop/Dockerfile`.
+
+1. Base image:  python:3.11
+2. Working directory: /app
+3. Tại sao `COPY requirements.txt` trước: vì Docker lưu cache theo từng layer , với việc các thư viện được dùng thì thường ít thay đổi hơn so với code nên làm vậy để tránh pip install lại
+4. CMD vs ENTRYPOINT khác nhau thế nào:CMD là lệnh mặc định, docker run image <lệnh khác> ghi đè được; ENTRYPOINT là chương trình cố định, muốn đổi phải dùng cờ --entrypoint
+
+### Exercise 2.2: Build và chạy container develop
+
+Chạy trong WSL2 Ubuntu, từ gốc repo (Dockerfile `COPY` theo đường dẫn tính từ gốc). Bản develop nhận `question` qua query chứ không nhận JSON (README.md mục 3):
+
+```bash
+$ docker build -f 02-docker/develop/Dockerfile -t my-agent:develop .
+$ docker run -d --name cp2-dev -p 8000:8000 my-agent:develop
+
+$ curl -i -X POST "http://localhost:8000/ask?question=What%20is%20Docker"
+HTTP/1.1 200 OK
+{"answer":"Container là cách đóng gói app để chạy ở mọi nơi. Build once, run anywhere!"}
+
+$ curl -i http://localhost:8000/health
+HTTP/1.1 200 OK
+{"status":"ok","uptime_seconds":4.9,"container":true}
+
+$ docker logs cp2-dev
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     172.17.0.1:41952 - "POST /ask?question=What%20is%20Docker HTTP/1.1" 200 OK
+INFO:     172.17.0.1:41966 - "GET /health HTTP/1.1" 200 OK
+
+$ docker exec cp2-dev sh -c "whoami; pwd; ls"
+root
+/app
+__pycache__
+app.py
+requirements.txt
+utils
+```
+
+**Quan sát:** container chạy được và trả lời giống chạy trực tiếp trên máy, nhưng tiến trình trong container chạy bằng **root** (`whoami` ra `root`). Đây là điểm chưa an toàn mà Dockerfile production đã sửa bằng `USER appuser`. Thư mục `/app` chứa đúng các file mà Dockerfile đã `COPY` (`app.py`, `requirements.txt`, `utils/`). `docker exec` và `docker logs` là hai cách để debug container đang chạy.
+
+### Exercise 2.3: Multi-stage build
+
+Phân tích `02-docker/production/Dockerfile`.
+
+- **Stage 1 (builder, dòng 16-29):** dùng `python:3.11-slim`, cài `gcc` và `libpq-dev`, rồi `pip install --user -r requirements.txt` để cài dependency vào `/root/.local`. Stage này chỉ để build, không dùng để deploy.
+- **Stage 2 (runtime, dòng 36-72):** bắt đầu lại từ `python:3.11-slim`, tạo user `appuser` (non-root), chỉ `COPY --from=builder /root/.local` (khoảng 40.8 MB) cùng `main.py` và `utils/mock_llm.py`, chuyển sang `USER appuser`, thêm `HEALTHCHECK` và `CMD uvicorn ... --workers 2`.
+- **Vì sao image nhỏ hơn:** (1) image cuối lấy base `-slim` thay vì bản `python:3.11` đầy đủ như bản develop; (2) các công cụ build (`gcc`, `libpq-dev`, cache của apt) nằm ở stage 1 và không được copy sang stage 2; (3) chỉ copy thư mục package đã cài và vài file code, không copy cả thư mục dự án.
+
+Kích thước đo bằng `docker images` (cột **DISK USAGE**; cột CONTENT SIZE ghi thêm để đối chiếu):
+
+| Image | DISK USAGE | CONTENT SIZE |
+|---|---|---|
+| `my-agent:develop` (single-stage, `python:3.11`) | 1.67 GB | 426 MB |
+| `my-agent:advanced` (multi-stage, `python:3.11-slim`) | 240 MB | 57.4 MB |
+
+Chênh lệch: **85.6%** theo DISK USAGE ((1670 − 240) / 1670 × 100); theo CONTENT SIZE là 86.5% ((426 − 57.4) / 426 × 100). Số liệu lấy từ lệnh `docker images` tôi tự chạy, không chép từ README.
+
+### Exercise 2.4: Docker Compose stack
+
+Sơ đồ các service (`02-docker/production/docker-compose.yml`):
+
+```text
+        Client (curl)
+            │  http://localhost:80
+            ▼
+     ┌────────────┐   proxy_pass agent:8000   ┌──────────────────────┐
+     │   nginx    │ ────────────────────────▶ │  agent (uvicorn,     │
+     │ :80 / :443 │                           │  2 workers, :8000)   │
+     └────────────┘                           │  không mở cổng ra    │
+                                              │  máy host            │
+                                              └──────────────────────┘
+   ───────────── network nội bộ "internal" (bridge) ─────────────
+        ┌────────┐      ┌─────────┐
+        │ redis  │      │ qdrant  │   khởi động và healthy, nhưng
+        │ :6379  │      │ :6333   │   agent KHÔNG gọi tới (main.py
+        └────────┘      └─────────┘   không dùng Redis/Qdrant)
+```
+
+- **Services được start:** 4 service là `agent`, `nginx`, `redis`, `qdrant`, cùng nằm trong network `internal`. Chỉ `nginx` publish cổng ra ngoài (80 và 443).
+- **Giao tiếp:** Nginx chuyển request tới `agent:8000` bằng tên service (DNS nội bộ của Docker, khai báo trong `nginx/nginx.conf`); Nginx còn giới hạn 10 request/giây mỗi IP và thêm vài header bảo mật. Compose truyền `REDIS_URL` và `QDRANT_URL` vào agent, và `depends_on` bắt agent chờ Redis/Qdrant `healthy`, nhưng `main.py` không dùng hai biến đó nên log agent không có dòng nào nhắc Redis hay Qdrant.
+
+Kết quả test qua Nginx (cổng 80), chạy bằng `docker compose -p k5-day14-docker up -d --build` trong `02-docker/production/` (đã `touch .env.local` trước):
+
+```bash
+$ curl -i http://localhost/health
+HTTP/1.1 200 OK
+{"status":"ok","uptime_seconds":0.4,"version":"2.0.0","timestamp":"2026-11-26T09:22:36.575327"}
+
+$ curl -i -X POST http://localhost/ask -H 'Content-Type: application/json' \
+    -d '{"question":"Explain microservices"}'
+HTTP/1.1 200 OK
+{"answer":"Agent đang hoạt động tốt! (mock response) Hỏi thêm câu hỏi đi nhé."}
+
+$ curl -i -X POST http://localhost/ask -H 'Content-Type: application/json' -d '{}'
+HTTP/1.1 422 Unprocessable Entity
+{"detail":"question required"}
+
+$ curl http://localhost:8000/health        # gọi thẳng agent, không qua Nginx
+(không kết nối được: agent không publish cổng 8000 ra host)
+```
+
+Lưu ý: lúc test, redis và qdrant đã `healthy` còn agent mới ở trạng thái `health: starting` (uptime 0.4 giây); tôi chưa quan sát agent tới `healthy`. Log agent hiện mỗi dòng hai lần vì `--workers 2` chạy hai tiến trình. Xong thì dọn bằng `docker compose -p k5-day14-docker down -v`.
+
 ## Part 3: Cloud Deployment
 
 ## Part 4: API Security
@@ -75,11 +179,5 @@ Nguồn: `develop/app.py` và `production/app.py`, `production/config.py` (trong
 
 ---
 
-## AI log
 
-<!-- RULES.md §1: mỗi lần dùng AI cho code Part 6 hoặc cho câu trả lời, ghi: hỏi gì · nhận gì · bạn tự sửa/kiểm tra thế nào. -->
 
-| Ngày | Checkpoint | Hỏi AI gì | AI trả lời/làm gì | Tôi tự kiểm tra / sửa thế nào |
-|---|---|---|---|---|
-| 2026-11-26 | CP0 | Hỏi Claude cách cài WSL2/Ubuntu, Docker integration và Python 3.12 (vì Python 3.14 không cài được `requirements.txt`) | Claude đề xuất và chạy các lệnh cài Ubuntu, `uv`, Python 3.12 | Tôi tự bật WSL integration trong Docker Desktop, tạo user Ubuntu, chạy lại `docker run hello-world` và `python -c "import os; print(os.name)"` (in `posix`) |
-| 2026-11-26 | CP1 | Nhờ Claude chạy bản develop/production của Part 1 và soạn mục 1.2, 1.3, rà soát số dòng ở 1.1 | Claude chạy `curl` và SIGTERM, soạn nội dung 1.2 và 1.3, sửa số dòng ở 1.1 | Tôi tự viết 1.1 ban đầu (có sai số dòng ở mục 3 và 5), Claude sửa lại; tôi đọc lại 1.1, 1.2, 1.3 và đối chiếu với `develop/app.py` và `production/app.py` |
