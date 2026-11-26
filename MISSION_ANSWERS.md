@@ -470,5 +470,34 @@ Số đo trong lần chạy này: image `63 MB`; `docker stop` thoát với exit
 
 ---
 
+## AI log
 
+<!-- RULES.md §1: mỗi lần dùng AI cho code Part 6 hoặc cho câu trả lời, ghi: hỏi gì · nhận gì · bạn tự sửa/kiểm tra thế nào. -->
 
+Công cụ: Claude Code (Claude Opus) trong terminal, làm theo từng checkpoint. Cách làm chung:
+- Với mỗi checkpoint, Claude đọc tài liệu lab (CHECKPOINTS, RUBRIC, README, CODE_LAB) rồi giải thích checkpoint đó xử lý vấn đề gì, xong khi nào, luật nào dễ mất điểm.
+- Sau đó Claude lập bảng kế hoạch: lệnh chính xác, thay đổi gì, đảo ngược thế nào, ai làm.
+- Tôi duyệt hoặc sửa kế hoạch trước khi bất kỳ lệnh nào chạy.
+- Claude chạy lệnh trên máy tôi (WSL2) và soạn nháp câu trả lời. Tôi đọc, sửa và quyết định nội dung cuối, và chỉ commit khi tôi bảo.
+- Mọi số đo trong bài lấy từ lệnh đã chạy trên máy tôi và từ file JSON/CSV đã nộp.
+
+| Ngày | Checkpoint | Hỏi AI gì | AI giải thích / hướng dẫn / làm gì | Tôi tự quyết định, sửa và kiểm tra thế nào |
+|---|---|---|---|---|
+| 2026-11-26 | CP0 | Hỏi cách cài WSL2/Ubuntu, Docker integration và Python 3.12 (Python 3.14 không cài được `requirements.txt`) | Giải thích vì sao phải chạy Python trong WSL2: `check_production_ready.py` cần `os.name == posix` để gửi SIGTERM. Đề xuất và chạy lệnh cài Ubuntu, `uv`, Python 3.12, venv đặt ngoài repo | Tôi tự bật WSL integration trong Docker Desktop, tạo user Ubuntu, chạy lại `docker run hello-world` và `python -c "import os; print(os.name)"` (in `posix`) |
+| 2026-11-26 | CP1 | Nhờ chạy bản develop/production của Part 1, soạn mục 1.2, 1.3 và rà số dòng ở 1.1 | Giải thích 5 anti-pattern và 12-factor (config qua biến môi trường, health check, graceful shutdown). Chạy `curl` và SIGTERM, soạn 1.2 và 1.3, sửa số dòng sai ở 1.1 | Tôi tự viết 1.1 ban đầu. Tôi đọc lại 1.1–1.3, đối chiếu với `develop/app.py` và `production/app.py` |
+| 2026-11-26 | CP2 | Hỏi cách build image từ gốc repo và so sánh kích thước | Giải thích multi-stage build, layer cache, vì sao phải build từ gốc repo , `.dockerignore`. Chạy `docker build`/`docker images`, soạn câu trả lời và sơ đồ stack | Số kích thước (1670 MB so với 240 MB, giảm 85.6 %) lấy từ `docker images` trên máy tôi. |
+| 2026-11-26 | CP3 | Hỏi khác nhau giữa 401 và 403, JWT, rate limit, cost guard;| Giải thích thiếu key → 401, sai quyền → 403; JWT HS256 stateless; sliding window log; cost guard 402/503; vì sao in-memory không dùng được khi scale. Chạy vòng `curl -i` lấy 401/200/429, soạn nháp | Tôi duyệt từng mục. Tôi tự sửa câu hỏi 4.1 (bỏ phần thừa). Mã HTTP trong bài lấy từ output `curl -i` |
+| 2026-11-26 | CP4 | Hỏi liveness và readiness, graceful shutdown, stateless; nhờ soạn Part 5 | Giải thích `/health` và `/ready` khác nhau ra sao, SIGTERM + lifespan, vì sao session để ở Redis, nginx round-robin, vì sao cần `-p k5-day14-scaling`. Chạy `docker compose ... --scale agent=3` và `test_stateless.py`, soạn nháp | Tôi duyệt nội dung; kết quả lấy từ output `test_stateless.py` và `docker compose` trên máy tôi |
+| 2026-11-26 | CP5 (Part 6) | Nhờ lập kế hoạch code cho 12 tiêu chí `check_production_ready.py` | Claude đọc các TODO và 12 tiêu chí, giải thích từng tiêu chí, đề xuất 9 quyết định thiết kế (D1–D9), ví dụ:<br>• Redis lỗi → 503 (fail-closed)<br>• sliding window bằng ZSET<br>• cost theo ngày UTC<br>• `compare_digest` cho API key<br>• log JSON không ghi key<br>• Dockerfile multi-stage, user non-root<br>Claude viết spec chia task con. Code trong `06-lab-complete/` do một phiên AI khác (`/spec-task`) viết theo spec, Claude review lại | Tôi duyệt D1–D9 trước khi viết code. Kết quả `check_production_ready.py`: **PASS 12/12** (dán ở trên). Kiểm thêm bằng tay:<br>• Redis tắt → `/ready` và `/ask` trả 503<br>• câu hỏi rỗng → 422<br>• `GET /ask` → 405<br>• `docker stop` thoát trong 0.8 s |
+| 2026-11-26 | CP6 (Part 3) | Hỏi cách deploy lên Render với `render.yaml` nằm trong thư mục con | Giải thích Blueprint Path, `rootDir`, `sync: false` cho secret, Key Value `ipAllowList: []`, free tier ngủ sau 15 phút. Hướng dẫn từng click trên Render; chạy 4 lệnh kiểm CP6 bằng script chỉ in mã HTTP; soạn `DEPLOYMENT.md` và Part 3; quét key trong file và lịch sử git trước khi commit | Tôi chọn Render. Tôi tự tạo API key, lưu ngoài repo, tạo Blueprint và nhập key trên Dashboard (không dán key vào chat). Tôi tự chụp 3 ảnh deploy. Kết quả 200/200/401/200 kiểm lại bằng chính lệnh trong `test.png` |
+| 2026-11-26 | CP7 (Part 7 bước 1) | Hỏi cách chạy load test, so sánh `MOCK_SLOW_RATE`, eval v1/v2 và sửa 2 câu sai | Giải thích p50/p95/p99 và vì sao SLO đặt theo percentile, Little's law (RPS ≈ concurrency / latency), cost / câu đúng, quality gate bằng exit code. Chạy `load_test.py`/`run_eval.py` với `--out`; đọc `missing_keywords` để tìm nguyên nhân 2 câu sai. Khi RPS ở c = 100 tụt, kiểm bằng `top` và thấy chính máy tạo tải nghẽn chứ không phải agent. Soạn mục 1–3 của báo cáo bằng script sinh bảng từ JSON | Tôi duyệt nguyên văn 2 entry thêm vào `KNOWLEDGE_BASE`. Eval cuối: 23/23, 0 regression, `✅ PASS`. Tôi yêu cầu đối chiếu `SUBMISSION.md`/`RUBRIC.md:74` và bỏ 2 số % CPU không có trong JSON. Script đối chiếu: 13/13 dòng bảng khớp JSON |
+| 2026-11-26 | CP8 (Part 7 bước 2) | Hỏi cách bật stack, chụp Grafana/Jaeger/Alerts, làm alert firing và benchmark scale | Giải thích Golden Signals, trace/span, `inactive → pending → firing` và `for:`, vì sao `docker pause` mới ra `AgentInstanceDown`, vì sao scale 3 không cải thiện (Locust closed-loop, nút thắt ở LLM). Tìm ra lỗi `ModuleNotFoundError: uvicorn` trong `production/Dockerfile` và cách sửa theo `CODE_LAB.md:821`. Chạy Locust, đo thời gian tới firing bằng Prometheus API, tìm trace qua Jaeger API v3. Soạn mục 4–6 của báo cáo | Tôi kiểm `RULES.md` không cấm sửa Dockerfile rồi mới đồng ý sửa. Tôi tự chụp 4 ảnh theo hướng dẫn, và chụp lại ảnh trace lỗi cho thấy event `exception`. Script đối chiếu: số mục 5 khớp CSV 4/4. Mục 6 (điều học được) là bản Claude nháp, tôi đọc lại và sửa theo hiểu biết của mình |
+| 2026-11-26 | Nộp bài | Nhờ viết mục AI log này | Claude soạn bảng này từ lịch sử làm bài | Tôi đọc lại từng dòng cho đúng với những gì đã làm |
+
+**Phần tôi còn phải tự học thêm (đã ghi lại, chưa trả lời hết khi làm):**
+- liveness và readiness khi mất Redis
+- vì sao `sync: false` an toàn
+- p95 và p99 khi có request chậm
+- vì sao scale không cải thiện
+- ý nghĩa của `for:` trong alert rule
+- `docker pause` và `docker stop` khác nhau thế nào
