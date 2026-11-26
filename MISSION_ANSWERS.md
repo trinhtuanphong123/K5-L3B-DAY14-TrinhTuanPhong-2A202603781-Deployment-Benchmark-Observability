@@ -197,7 +197,7 @@ HTTP/1.1 200 OK
 
 1. API key được kiểm tra ở đâu?
    - Trong hàm dependency `verify_api_key` (`04-api-gateway/develop/app.py:39-54`). Hàm lấy header `X-API-Key` qua `APIKeyHeader(name="X-API-Key", auto_error=False)` (dòng 36) và so sánh với biến `API_KEY` (dòng 35, đọc từ môi trường `AGENT_API_KEY`). Endpoint `/ask` được bảo vệ bằng cách khai báo dependency này; `/health` không khai báo nên công khai (đã thấy trả 200 không cần key).
-2. Điều gì xảy ra nếu sai key? (nhớ phân biệt thiếu key và sai key)
+2. Điều gì xảy ra nếu sai key?
    - Thiếu header: `401 Unauthorized` "Missing API key" (dòng 44-48). Có header nhưng giá trị khác `API_KEY`: `403 Forbidden` "Invalid API key." (dòng 49-53). Cả hai tôi đã chạy thật ở trên. Lưu ý: bản Part 6 yêu cầu sai key cũng trả 401, nên không chép nguyên logic này.
 3. Làm sao rotate key?
    - Đổi giá trị biến môi trường `AGENT_API_KEY` rồi khởi động lại process; không cần sửa code vì key đọc ở dòng 35. Nếu không đặt biến, code dùng giá trị mặc định `demo-key-change-in-production` (dòng 35), nên production bắt buộc phải đặt biến. Hạn chế: chỉ có một key chung cho mọi client, nên rotate là mọi client phải đổi cùng lúc; muốn rotate êm cần chấp nhận nhiều key cùng lúc (cái này code hiện tại chưa làm). Key cũng bị in ra log lúc khởi động (log develop có dòng `API Key: secret-key-123`), nên không dùng bản develop ở production.
@@ -405,6 +405,29 @@ Hạn chế của phép thử: tôi không quan sát được Nginx có phải r
 ---
 
 ## Output của `python check_production_ready.py` (CP5)
+
+Chạy trong WSL2 Ubuntu (`os.name == posix`), thư mục `06-lab-complete/`, Docker Desktop bật, Python 3.12 (`pip install -r requirements.txt`), lệnh `python check_production_ready.py` (chế độ đầy đủ, không `--skip-docker`), ngày 2026-11-26:
+
+```text
+  📋 Checklist Deliverable
+     ✅ Dockerfile (multi-stage, < 500 MB)
+     ✅ docker-compose.yml (agent + redis)
+     ✅ .dockerignore
+     ✅ Health check endpoint (GET /health)
+     ✅ Readiness endpoint (GET /ready)
+     ✅ API Key authentication
+     ✅ Rate limiting
+     ✅ Cost guard
+     ✅ Config từ environment variables
+     ✅ Structured logging
+     ✅ Graceful shutdown
+     ✅ Public URL ready (Railway / Render config)
+----------------------------------------------------------------
+  Result: 12/12 tiêu chí đạt · 43/43 checks passed
+  🎉 PASS 12/12 — PRODUCTION READY! Deploy nào!
+```
+
+Số đo trong lần chạy này: image `63 MB`; `docker stop` thoát với exit code 0 sau 0.8 giây; rate limit trả 429 sau 5 request thành công (`RATE_LIMIT_PER_MINUTE=5`), restart agent vẫn 429; budget `0.000001` USD trả 402.
 
 ---
 
