@@ -169,6 +169,45 @@ Lưu ý: lúc test, redis và qdrant đã `healthy` còn agent mới ở trạng
 
 ## Part 3: Cloud Deployment
 
+### Exercise 3.1 / 3.2: Deploy (nền tảng chính: Render)
+
+Theo CHECKPOINTS.md CP6, tôi deploy chính agent Part 6 (`06-lab-complete/`), không deploy app mẫu trong `03-cloud-deployment/`. Tạo bằng Render Blueprint từ repo GitHub, Blueprint Path = `06-lab-complete/render.yaml`; Blueprint tạo web service Docker `k5-day14-agent` và Key Value `k5-day14-redis`, `AGENT_API_KEY` nhập trên Dashboard (`sync: false`). Chi tiết ở [DEPLOYMENT.md](DEPLOYMENT.md).
+
+- URL: https://k5-day14-agent-jilo.onrender.com
+- Screenshot: [dashboard](screenshots/dashboard.png) · [running](screenshots/running.png) · [test](screenshots/test.png)
+
+4 lệnh tự kiểm của CP6 (`BASE` = URL trên, key lấy từ biến môi trường, không in ra):
+
+```text
+GET  /health                    → 200
+GET  /ready                     → 200   (Redis trên Render kết nối được)
+POST /ask (không X-API-Key)     → 401
+POST /ask (X-API-Key đúng)      → 200
+```
+
+### So sánh `railway.toml` và `render.yaml` (nền tảng còn lại)
+
+Hai file trong `06-lab-complete/` cùng deploy một Dockerfile và cùng kiểm `/health`, nhưng phạm vi khác nhau:
+
+| Khía cạnh | `railway.toml` | `render.yaml` (Blueprint) |
+|---|---|---|
+| Định dạng, phạm vi | TOML, chỉ cấu hình build/deploy của **một** service | YAML, khai báo **toàn bộ hạ tầng**: web service + Key Value, kèm cách nối biến giữa chúng |
+| Build | `builder = "DOCKERFILE"`, `dockerfilePath = "Dockerfile"`; thư mục gốc chọn khi `railway up` trong `06-lab-complete/` | `runtime: docker`, `rootDir: 06-lab-complete`; `dockerfilePath`, `dockerContext` tính tương đối với `rootDir` |
+| Health check | `healthcheckPath = "/health"`, `healthcheckTimeout = 30` | `healthCheckPath: /health` |
+| Restart | `restartPolicyType = "ON_FAILURE"`, tối đa 3 lần | Render tự quản lý, không cần khai báo |
+| Redis | không nằm trong file: phải thêm Redis bằng plugin rồi đặt biến `REDIS_URL = ${{Redis.REDIS_URL}}` | khai báo service `type: keyvalue` và nối bằng `fromService … property: connectionString` |
+| Secret | đặt bằng `railway variables` hoặc Dashboard | `sync: false` → Render hỏi giá trị khi tạo Blueprint, file không chứa giá trị |
+| Plan, region | không có trong file (chọn trên Railway) | `plan: free`, `region: singapore` ngay trong file |
+
+Vì sao khác: `railway.toml` là "config-as-code" cho cách build và chạy một service, còn các resource khác (Redis, biến) tạo bằng CLI hoặc giao diện; `render.yaml` là Infrastructure-as-Code, một file tạo lại được cả stack. Vì vậy với Render, mất cả project vẫn dựng lại được chỉ từ repo, còn với Railway phải nhớ thêm các bước thêm Redis và đặt biến.
+
+### Exercise 3.3: Cloud Run CI/CD (đọc `03-cloud-deployment/production-cloud-run/`)
+
+- `cloudbuild.yaml` chạy 4 bước nối nhau bằng `waitFor`: **test** (`pytest tests/` trong `python:3.11-slim`) → **build** image Docker gắn tag `$COMMIT_SHA` và `latest`, dùng `--cache-from` image cũ để tận dụng layer cache → **push** lên Container Registry `gcr.io/$PROJECT_ID/ai-agent` → **deploy** bằng `gcloud run deploy` với image đúng `$COMMIT_SHA`, region `asia-southeast1`, 1–10 instance, 512Mi, secret lấy từ Secret Manager (`--set-secrets`).
+- Test fail thì các bước sau không chạy, nên code lỗi không lên production; deploy theo `$COMMIT_SHA` nên biết chính xác commit nào đang chạy và rollback được.
+- `service.yaml` mô tả cùng service theo kiểu khai báo (Knative): `minScale: 1` để tránh cold start, `maxScale: 10`, `containerConcurrency: 80`, giới hạn CPU/RAM, secret qua `secretKeyRef`, `livenessProbe` gọi `/health` và `startupProbe` gọi `/ready` (đúng tách liveness/readiness ở Part 5).
+- Điểm tôi để ý khi đọc: thư mục `production-cloud-run/` chỉ có hai file này, không có `requirements.txt` hay `tests/`, nên bước test sẽ fail nếu chạy nguyên trong thư mục đó; và `cloudbuild.yaml` chỉ đặt secret `OPENAI_API_KEY`, còn `AGENT_API_KEY` chỉ có trong `service.yaml`.
+
 ## Part 4: API Security
 
 ### Exercise 4.1: API Key authentication (`04-api-gateway/develop/app.py`)
